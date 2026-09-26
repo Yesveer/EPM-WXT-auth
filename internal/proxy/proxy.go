@@ -279,7 +279,7 @@ func RegisterProxyRoutes(r *gin.RouterGroup, proxy *Proxy, authMiddleware gin.Ha
 	r.GET("/sessions/:id", handlers...)
 
 	// Terminal routes
-	r.GET("/terminal/:agent_id/ws", handlers...)  // Fixed: backend expects :agent_id, not :id
+	r.GET("/terminal/:agent_id/ws", handlers...) // Fixed: backend expects :agent_id, not :id
 	r.GET("/terminal/sessions", handlers...)
 	r.DELETE("/terminal/sessions/:id", handlers...)
 
@@ -289,6 +289,13 @@ func RegisterProxyRoutes(r *gin.RouterGroup, proxy *Proxy, authMiddleware gin.Ha
 	r.GET("/machines/:id/rdp/file", handlers...)
 	// Live remote-desktop sessions on a machine
 	r.GET("/machines/:id/desktop/sessions", handlers...)
+
+	// Remote control — joining the user's LIVE session with their consent,
+	// as opposed to /rdp/ws above which opens a separate one.
+	r.POST("/machines/:id/remote-control/start", handlers...)
+	r.GET("/machines/:id/remote-control/status", handlers...)
+	r.POST("/machines/:id/remote-control/stop", handlers...)
+	r.GET("/machines/:id/remote-control/ws", handlers...)
 	// External SSH/RDP access history + active sessions
 	r.GET("/machines/:id/access-events", handlers...)
 

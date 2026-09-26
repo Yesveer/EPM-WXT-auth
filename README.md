@@ -1,4 +1,4 @@
-# VSAY Auth Service
+# EPM WebXterm Auth
 
 Production-ready authentication service with Keycloak integration for multi-tenant RBAC (Role-Based Access Control).
 
