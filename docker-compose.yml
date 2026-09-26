@@ -1,0 +1,11 @@
+services:
+  vsay-auth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vsay-auth
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8081}:${PORT:-8081}"
+    restart: unless-stopped
