@@ -197,6 +197,13 @@ func RegisterPublicProxyRoutes(r *gin.Engine, proxy *Proxy) {
 	// GET /agent/download/:filename — agent package downloads (no auth, public)
 	r.GET("/agent/download/:filename", proxy.Handler())
 
+	// POST /agent/logs — agents ship the MACHINE's own system logs and website
+	// activity as gzipped NDJSON batches. Public for the same reason as
+	// sign-cert: the caller is an agent holding its registration token, not a
+	// portal user with a session. The backend authenticates that token and
+	// rejects revoked machines.
+	r.POST("/agent/logs", proxy.Handler())
+
 	// NOTE: /grpc-mode is registered directly in main.go with its own fallback logic
 }
 
@@ -315,6 +322,12 @@ func RegisterProxyRoutes(r *gin.RouterGroup, proxy *Proxy, authMiddleware gin.Ha
 	// S3 / tenant configuration routes
 	r.GET("/config/s3", handlers...)
 	r.POST("/config/s3", handlers...)
+
+	// Endpoint log collection — the tenant-wide policy for shipping each
+	// MACHINE's own system logs and website activity. Distinct from the
+	// /log-management routes below, which govern the portal's own logs.
+	r.GET("/config/log-shipping", handlers...)
+	r.POST("/config/log-shipping", handlers...)
 
 	// Session recordings routes
 	r.GET("/machines/:id/recordings", handlers...)
