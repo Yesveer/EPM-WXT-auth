@@ -3,6 +3,8 @@ package database
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -193,9 +195,9 @@ func (s *Store) UpdateUserPassword(userID primitive.ObjectID, newHash string) er
 		bson.M{"_id": userID},
 		bson.M{
 			"$set": bson.M{
-				"password_hash":      newHash,
+				"password_hash":       newHash,
 				"must_reset_password": false,
-				"updated_at":         now,
+				"updated_at":          now,
 			},
 		},
 	)
@@ -243,6 +245,70 @@ func (s *Store) ListUsersByTenant(tenantID string) ([]*User, error) {
 		return nil, err
 	}
 	return users, nil
+}
+
+// userSearchFilter builds the tenant listing filter, optionally narrowed by a
+// search term.
+//
+// The term is matched against the fields an admin would actually type —
+// username, email, and either name — anchored nowhere, because somebody
+// looking for "priya" should find "Priya Sharma" and "priya.s@corp.com" alike.
+//
+// Regex metacharacters are escaped: without that, a search box becomes a way
+// to run arbitrary patterns against the whole collection, and a stray "(" just
+// returns an error instead of results.
+func userSearchFilter(tenantID, search string) bson.M {
+	filter := bson.M{"tenant_id": tenantID}
+
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return filter
+	}
+
+	escaped := regexp.QuoteMeta(search)
+	filter["$or"] = []bson.M{
+		{"username": bson.M{"$regex": escaped, "$options": "i"}},
+		{"email": bson.M{"$regex": escaped, "$options": "i"}},
+		{"first_name": bson.M{"$regex": escaped, "$options": "i"}},
+		{"last_name": bson.M{"$regex": escaped, "$options": "i"}},
+	}
+	return filter
+}
+
+// SearchUsersByTenantPaged lists one page of a tenant's users, narrowed by an
+// optional search term.
+//
+// Searching has to happen here rather than in the browser: the page only ever
+// holds one page of users, so filtering it client-side finds nobody who
+// happens to be on page three.
+func (s *Store) SearchUsersByTenantPaged(tenantID, search string, limit, skip int) ([]*User, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	opts := options.Find().SetLimit(int64(limit)).SetSkip(int64(skip)).
+		SetSort(bson.D{{Key: "created_at", Value: -1}})
+
+	cursor, err := s.db.database.Collection("users").
+		Find(ctx, userSearchFilter(tenantID, search), opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []*User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// CountUsersByTenantSearch counts the users a search would return, so the
+// page count reflects the filtered set rather than the whole tenant.
+func (s *Store) CountUsersByTenantSearch(tenantID, search string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.db.database.Collection("users").
+		CountDocuments(ctx, userSearchFilter(tenantID, search))
 }
 
 func (s *Store) ListUsersByTenantPaged(tenantID string, limit, skip int) ([]*User, error) {

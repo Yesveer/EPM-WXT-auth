@@ -145,7 +145,7 @@ func (db *MongoDB) createIndexes(ctx context.Context) error {
 			Keys: bson.D{{Key: "username", Value: 1}},
 		},
 		{
-			Keys: bson.D{{Key: "expires_at", Value: 1}},
+			Keys:    bson.D{{Key: "expires_at", Value: 1}},
 			Options: options.Index().SetExpireAfterSeconds(0), // TTL index
 		},
 	})

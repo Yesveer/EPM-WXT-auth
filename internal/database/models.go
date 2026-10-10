@@ -35,6 +35,21 @@ type User struct {
 	UpdatedAt         time.Time          `bson:"updated_at" json:"updated_at"`
 	LastLoginAt       *time.Time         `bson:"last_login_at,omitempty" json:"last_login_at,omitempty"`
 	LastSyncAt        *time.Time         `bson:"last_sync_at,omitempty" json:"last_sync_at,omitempty"` // Last KC sync
+
+	// EntraObjectID is the account's object id in Microsoft Entra, when the
+	// account came from (or has been matched to) a directory.
+	//
+	// It is the only stable identity Entra offers: mail and
+	// userPrincipalName both change when somebody marries, changes team, or
+	// the organisation renames its domain. Matching on email alone would
+	// orphan the local account at exactly those moments.
+	EntraObjectID string `bson:"entra_object_id,omitempty" json:"entra_object_id,omitempty"`
+
+	// DirectorySource marks an account the directory sync owns. Accounts
+	// created here by hand have it empty, and the sync must never disable or
+	// rewrite those — a locally-created break-glass admin is not in Entra and
+	// must not be switched off for it.
+	DirectorySource string `bson:"directory_source,omitempty" json:"directory_source,omitempty"`
 }
 
 // Organization represents a company/tenant
@@ -58,8 +73,19 @@ type Group struct {
 	Description string             `bson:"description,omitempty" json:"description,omitempty"`
 	MemberIDs   []string           `bson:"member_ids" json:"member_ids"`   // User IDs (MongoDB)
 	MachineIDs  []string           `bson:"machine_ids" json:"machine_ids"` // Machine IDs
-	CreatedAt   time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt   time.Time          `bson:"updated_at" json:"updated_at"`
+
+	// EntraGroupID is the group's object id in Microsoft Entra, when it came
+	// from a directory. Groups are matched on it rather than on name, because
+	// a renamed group would otherwise become a second group and every policy
+	// scoped to the first would quietly stop applying to anybody.
+	EntraGroupID string `bson:"entra_group_id,omitempty" json:"entra_group_id,omitempty"`
+
+	// DirectorySource marks a group the sync owns. Membership of such a group
+	// is overwritten on every run, so a group created here by hand must never
+	// carry it.
+	DirectorySource string    `bson:"directory_source,omitempty" json:"directory_source,omitempty"`
+	CreatedAt       time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt       time.Time `bson:"updated_at" json:"updated_at"`
 }
 
 // AuditLog tracks all user actions
@@ -173,6 +199,68 @@ type OIDCSettings struct {
 	GitHubClientSecret    string             `bson:"github_client_secret" json:"-"`
 	UpdatedAt             time.Time          `bson:"updated_at" json:"updated_at"`
 	UpdatedBy             string             `bson:"updated_by,omitempty" json:"updated_by,omitempty"`
+}
+
+// DirectorySourceEntra marks records owned by the Microsoft Entra sync.
+const DirectorySourceEntra = "entra"
+
+// EntraSyncSettings configures directory synchronisation for one tenant.
+//
+// Per tenant rather than global, unlike OIDCSettings: the sign-in button is
+// one app registration shared by everybody, but each customer organisation
+// has its own Entra directory and its own people. Credentials left empty fall
+// back to the global Microsoft OIDC ones, which is the common single-directory
+// case.
+type EntraSyncSettings struct {
+	ID       primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	TenantID string             `bson:"tenant_id" json:"tenant_id"`
+
+	Enabled bool `bson:"enabled" json:"enabled"`
+
+	// Credentials for the client-credentials flow. ClientSecret has no
+	// omitempty, for the same reason as OIDCSettings: the document is written
+	// wholesale, and omitempty would silently keep a stale secret when a save
+	// intentionally clears it.
+	DirectoryTenantID string `bson:"directory_tenant_id" json:"directory_tenant_id"`
+	ClientID          string `bson:"client_id" json:"client_id"`
+	ClientSecret      string `bson:"client_secret" json:"-"`
+
+	SyncUsers  bool `bson:"sync_users" json:"sync_users"`
+	SyncGroups bool `bson:"sync_groups" json:"sync_groups"`
+
+	// IntervalMinutes is how often the sync runs. Zero means the default.
+	IntervalMinutes int `bson:"interval_minutes" json:"interval_minutes"`
+
+	// DefaultRole is given to accounts the sync creates. It is applied at
+	// creation ONLY: a person promoted to admin here must not be demoted back
+	// by the next run.
+	DefaultRole string `bson:"default_role" json:"default_role"`
+
+	// GroupFilter, when set, limits synced groups to those whose name starts
+	// with it. A directory with hundreds of distribution lists would otherwise
+	// bury the handful an operator actually writes policy against.
+	GroupFilter string `bson:"group_filter,omitempty" json:"group_filter,omitempty"`
+
+	LastRunAt  *time.Time `bson:"last_run_at,omitempty" json:"last_run_at,omitempty"`
+	LastStatus string     `bson:"last_status,omitempty" json:"last_status,omitempty"`
+	LastError  string     `bson:"last_error,omitempty" json:"last_error,omitempty"`
+
+	LastUsersCreated  int `bson:"last_users_created" json:"last_users_created"`
+	LastUsersUpdated  int `bson:"last_users_updated" json:"last_users_updated"`
+	LastUsersDisabled int `bson:"last_users_disabled" json:"last_users_disabled"`
+	LastGroupsCreated int `bson:"last_groups_created" json:"last_groups_created"`
+	LastGroupsUpdated int `bson:"last_groups_updated" json:"last_groups_updated"`
+
+	// What the run attempted, not just what it achieved. See EntraSyncCounts
+	// for why the successes alone are not enough to diagnose a run.
+	LastUsersSeen    int    `bson:"last_users_seen" json:"last_users_seen"`
+	LastUsersSkipped int    `bson:"last_users_skipped" json:"last_users_skipped"`
+	LastUsersFailed  int    `bson:"last_users_failed" json:"last_users_failed"`
+	LastUserError    string `bson:"last_user_error,omitempty" json:"last_user_error,omitempty"`
+	LastUsersSyncOff bool   `bson:"last_users_sync_off" json:"last_users_sync_off"`
+
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+	UpdatedBy string    `bson:"updated_by,omitempty" json:"updated_by,omitempty"`
 }
 
 // APIKey is a personal access token (GitHub-style) that lets a user call any

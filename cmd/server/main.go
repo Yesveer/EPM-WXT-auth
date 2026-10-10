@@ -17,9 +17,10 @@ import (
 	"github.com/vsay/vsay-auth/internal/api"
 	"github.com/vsay/vsay-auth/internal/config"
 	"github.com/vsay/vsay-auth/internal/database"
+	"github.com/vsay/vsay-auth/internal/entrasync"
 	"github.com/vsay/vsay-auth/internal/keycloak"
-	"github.com/vsay/vsay-auth/internal/middleware"
 	_ "github.com/vsay/vsay-auth/internal/metrics"
+	"github.com/vsay/vsay-auth/internal/middleware"
 	"github.com/vsay/vsay-auth/internal/proxy"
 	"github.com/vsay/vsay-auth/internal/services"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -142,6 +143,12 @@ func main() {
 	usersHandler := api.NewUsersHandler(store, kcClient, emailService, logger)
 	adminHandler := api.NewAdminHandler(store, kcClient, logger)
 	groupsHandler := api.NewGroupsHandler(store, kcClient, accessService, logger)
+
+	// Directory synchronisation from Microsoft Entra: provisions users and
+	// groups so SSO sign-in finds an account, and so application policy can be
+	// scoped to directory groups.
+	entraSyncer := entrasync.New(store, kcClient, logger)
+	entraSyncHandler := api.NewEntraSyncHandler(store, cfg, entraSyncer, logger)
 	rolesHandler := api.NewRolesHandler(store, kcClient, logger)
 	oidcHandler := api.NewOIDCHandler(store, cfg, jwtService, logger)
 	auditHandler := api.NewAuditHandler(store, logger)
@@ -161,11 +168,11 @@ func main() {
 
 	// CORS configuration - Allow all origins (development mode)
 	corsConfig := cors.Config{
-		AllowAllOrigins:  true,                // Allow all origins
-		AllowMethods:     []string{"*"},       // Allow all methods
-		AllowHeaders:     []string{"*"},       // Allow all headers
-		ExposeHeaders:    []string{"*"},       // Expose all headers
-		AllowCredentials: false,               // Must be false when AllowAllOrigins is true
+		AllowAllOrigins:  true,          // Allow all origins
+		AllowMethods:     []string{"*"}, // Allow all methods
+		AllowHeaders:     []string{"*"}, // Allow all headers
+		ExposeHeaders:    []string{"*"}, // Expose all headers
+		AllowCredentials: false,         // Must be false when AllowAllOrigins is true
 		MaxAge:           12 * time.Hour,
 	}
 	router.Use(cors.New(corsConfig))
@@ -277,6 +284,9 @@ func main() {
 		// Groups routes (authenticated, admin for mutations)
 		api.RegisterGroupsRoutes(apiGroup, groupsHandler, authMiddleware, adminMiddleware)
 
+		// Directory sync routes (admin only — the handler checks the role)
+		api.RegisterEntraSyncRoutes(apiGroup.Group("", authMiddleware), entraSyncHandler)
+
 		// Roles routes (authenticated, admin for viewing/assigning)
 		api.RegisterRolesRoutes(apiGroup, rolesHandler, authMiddleware, adminMiddleware)
 
@@ -316,6 +326,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go reconciler.Start(ctx)
+
+	// Directory sync runs on each tenant's own interval. It shares the
+	// handler's credential resolution so a scheduled run and a manual one can
+	// never authenticate differently.
+	go entrasync.NewScheduler(entraSyncer, store, entraSyncHandler.ResolveCredentials, logger).Run(ctx)
 
 	// Start server
 	logger.Info("Starting vsay-auth service",

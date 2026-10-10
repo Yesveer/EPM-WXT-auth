@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vsay/vsay-auth/internal/database"
@@ -54,10 +55,13 @@ func (h *UsersHandler) ListUsers(c *gin.Context) {
 	}
 
 	tid := tenantID.(string)
+	search := strings.TrimSpace(c.Query("search"))
 	limitStr := c.Query("limit")
 
-	// No limit → return all (backward compatible)
-	if limitStr == "" {
+	// A search always goes through the paged path, even with no limit: the
+	// whole point is to look beyond the page in front of you, and returning
+	// every match unpaged would be a different answer to the same question.
+	if limitStr == "" && search == "" {
 		users, err := h.store.ListUsersByTenant(tid)
 		if err != nil {
 			h.logger.Error("Failed to list users", zap.Error(err))
@@ -85,13 +89,16 @@ func (h *UsersHandler) ListUsers(c *gin.Context) {
 	}
 	skip := (page - 1) * limit
 
-	total, err := h.store.CountUsersByTenant(tid)
+	// Counted with the same filter as the listing, so the page count describes
+	// the search results rather than the whole tenant — otherwise a search
+	// returning three people still shows "page 1 of 40".
+	total, err := h.store.CountUsersByTenantSearch(tid, search)
 	if err != nil {
 		h.logger.Error("Failed to count users", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list users"})
 		return
 	}
-	users, err := h.store.ListUsersByTenantPaged(tid, limit, skip)
+	users, err := h.store.SearchUsersByTenantPaged(tid, search, limit, skip)
 	if err != nil {
 		h.logger.Error("Failed to list users", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list users"})
@@ -462,11 +469,11 @@ func RegisterUsersRoutes(r *gin.RouterGroup, handler *UsersHandler, authMiddlewa
 	users := r.Group("/users")
 	users.Use(authMiddleware) // All user routes require authentication
 	{
-		users.GET("/me", handler.GetMe)                                  // Get current user
-		users.GET("", adminMiddleware, handler.ListUsers)                // List users (admin only)
-		users.GET("/:id", handler.GetUser)                               // Get user by ID
-		users.POST("", adminMiddleware, handler.CreateUser)              // Create user (admin only)
-		users.PUT("/:id", adminMiddleware, handler.UpdateUser)           // Update user (admin only)
-		users.DELETE("/:id", adminMiddleware, handler.DeleteUser)        // Delete user (admin only)
+		users.GET("/me", handler.GetMe)                           // Get current user
+		users.GET("", adminMiddleware, handler.ListUsers)         // List users (admin only)
+		users.GET("/:id", handler.GetUser)                        // Get user by ID
+		users.POST("", adminMiddleware, handler.CreateUser)       // Create user (admin only)
+		users.PUT("/:id", adminMiddleware, handler.UpdateUser)    // Update user (admin only)
+		users.DELETE("/:id", adminMiddleware, handler.DeleteUser) // Delete user (admin only)
 	}
 }

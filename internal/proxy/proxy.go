@@ -319,6 +319,35 @@ func RegisterProxyRoutes(r *gin.RouterGroup, proxy *Proxy, authMiddleware gin.Ha
 	r.POST("/community/issues/:id/fixes/:fix_id/accept", handlers...)
 	r.POST("/community/upload", handlers...)
 
+	// Installed-application inventory — what software is on the fleet.
+	// Read-only: the agent reports it, the portal displays it.
+	r.GET("/machines/:id/applications", handlers...)
+	r.GET("/applications/catalog", handlers...)
+	r.GET("/applications/machines", handlers...)
+
+	// Application-control policies. Authored and projected only — the backend
+	// keeps enforcement off for the whole of this phase.
+	r.GET("/app-policies", handlers...)
+	r.POST("/app-policies", handlers...)
+	r.POST("/app-policies/simulate", handlers...)
+	r.GET("/app-policies/:id", handlers...)
+	r.PUT("/app-policies/:id", handlers...)
+	r.DELETE("/app-policies/:id", handlers...)
+
+	// Remote-access policies: who may connect where, when, and how.
+	r.GET("/remote-access-policies", handlers...)
+	r.POST("/remote-access-policies", handlers...)
+	r.GET("/remote-access-policies/:id", handlers...)
+	r.PUT("/remote-access-policies/:id", handlers...)
+	r.DELETE("/remote-access-policies/:id", handlers...)
+
+	// Endpoint audit events, CSV export and the compliance report. Distinct
+	// from /audit-logs above, which is this service's own sign-in and
+	// user-management trail.
+	r.GET("/audit-events", handlers...)
+	r.GET("/audit-events/export", handlers...)
+	r.GET("/compliance-report", handlers...)
+
 	// S3 / tenant configuration routes
 	r.GET("/config/s3", handlers...)
 	r.POST("/config/s3", handlers...)
