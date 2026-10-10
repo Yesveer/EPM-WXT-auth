@@ -56,15 +56,15 @@ func (e *EmailService) smtpSettings() (host string, port int, username, password
 // brandName resolves the product name shown in outgoing email — the
 // super_admin configured branding (name_part1+name_part2, no space, matching
 // how the frontend joins them in BrandMark), falling back to the default
-// "WebXterm" if branding was never customized.
+// "EPM" if branding was never customized.
 func (e *EmailService) brandName() string {
 	branding, err := e.store.GetBranding()
 	if err != nil || branding == nil {
-		return "WebXterm"
+		return "EPM"
 	}
 	name := strings.TrimSpace(branding.NamePart1 + branding.NamePart2)
 	if name == "" {
-		return "WebXterm"
+		return "EPM"
 	}
 	return name
 }

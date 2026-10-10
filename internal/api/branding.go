@@ -23,9 +23,9 @@ func NewBrandingHandler(store *database.Store, logger *zap.Logger) *BrandingHand
 var defaultBranding = gin.H{
 	"logo_url":                       "",
 	"favicon_url":                    "",
-	"name_part1":                     "Web",
+	"name_part1":                     "E",
 	"name_part1_color":               "",
-	"name_part2":                     "Xterm",
+	"name_part2":                     "PM",
 	"name_part2_color":               "",
 	"default_theme_color":            "cyan",
 	"default_theme_color_updated_at": "", // never customized — any personal colour a user has is honoured
@@ -123,8 +123,8 @@ func (h *BrandingHandler) UpdateBranding(c *gin.Context) {
 	}
 	if cfg == nil {
 		cfg = &database.BrandingConfig{
-			NamePart1:         "Web",
-			NamePart2:         "Xterm",
+			NamePart1:         "E",
+			NamePart2:         "PM",
 			DefaultThemeColor: "cyan",
 		}
 	}
