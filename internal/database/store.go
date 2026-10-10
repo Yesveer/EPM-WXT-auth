@@ -599,6 +599,65 @@ func (s *Store) ListGroupsByTenant(tenantID string) ([]*Group, error) {
 	return groups, nil
 }
 
+// groupSearchFilter builds the tenant listing filter, optionally narrowed by a
+// search term.
+//
+// Matched against name and description — the two things an admin reads in the
+// table — unanchored, so "team" finds "Pune Team". Regex metacharacters are
+// escaped for the same reason they are in userSearchFilter: an unescaped search
+// box runs arbitrary patterns against the collection, and a stray "(" returns
+// an error rather than results.
+func groupSearchFilter(tenantID, search string) bson.M {
+	filter := bson.M{"tenant_id": tenantID}
+
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return filter
+	}
+
+	escaped := regexp.QuoteMeta(search)
+	filter["$or"] = []bson.M{
+		{"name": bson.M{"$regex": escaped, "$options": "i"}},
+		{"description": bson.M{"$regex": escaped, "$options": "i"}},
+	}
+	return filter
+}
+
+// SearchGroupsByTenantPaged lists one page of a tenant's groups, narrowed by an
+// optional search term.
+//
+// Server-side for the same reason as the user search: the browser holds one
+// page, so filtering there finds nothing on page three.
+func (s *Store) SearchGroupsByTenantPaged(tenantID, search string, limit, skip int) ([]*Group, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	opts := options.Find().SetLimit(int64(limit)).SetSkip(int64(skip)).
+		SetSort(bson.D{{Key: "created_at", Value: -1}})
+
+	cursor, err := s.db.database.Collection("groups").
+		Find(ctx, groupSearchFilter(tenantID, search), opts)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var groups []*Group
+	if err := cursor.All(ctx, &groups); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+// CountGroupsByTenantSearch counts what a search would return, so the page
+// count reflects the filtered set rather than the whole tenant.
+func (s *Store) CountGroupsByTenantSearch(tenantID, search string) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.db.database.Collection("groups").
+		CountDocuments(ctx, groupSearchFilter(tenantID, search))
+}
+
 func (s *Store) ListGroupsByTenantPaged(tenantID string, limit, skip int) ([]*Group, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

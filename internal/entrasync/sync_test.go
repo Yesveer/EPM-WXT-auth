@@ -63,13 +63,47 @@ func (f *fakeStore) GetGroupByEntraGroupID(tenantID, groupID string) (*database.
 	return nil, nil
 }
 
+func (f *fakeStore) GetGroupByTenantAndName(tenantID, name string) (*database.Group, error) {
+	for _, g := range f.groups {
+		if g.TenantID == tenantID && g.Name == name {
+			return g, nil
+		}
+	}
+	return nil, nil
+}
+
+// CreateGroup enforces the unique index the real groups collection carries on
+// {tenant_id, name}. A fake that silently accepts a duplicate cannot reproduce
+// the production failure it exists to pin.
 func (f *fakeStore) CreateGroup(group *database.Group) error {
+	for _, g := range f.groups {
+		if g.TenantID == group.TenantID && g.Name == group.Name {
+			return errors.New("E11000 duplicate key error collection: groups index: tenant_id_1_name_1")
+		}
+	}
 	group.ID = primitive.NewObjectID()
 	f.groups = append(f.groups, group)
 	return nil
 }
 
-func (f *fakeStore) UpdateGroup(group *database.Group) error { return nil }
+func (f *fakeStore) UpdateGroup(group *database.Group) error {
+	for i, g := range f.groups {
+		if g.ID == group.ID {
+			f.groups[i] = group
+			return nil
+		}
+	}
+	return errors.New("group not found")
+}
+
+func (f *fakeStore) groupByName(name string) *database.Group {
+	for _, g := range f.groups {
+		if g.Name == name {
+			return g
+		}
+	}
+	return nil
+}
 
 func (f *fakeStore) userByEmail(email string) *database.User {
 	for _, u := range f.users {
@@ -390,6 +424,77 @@ func TestRenamedGroupIsUpdatedNotDuplicated(t *testing.T) {
 	// about, so a sync must not clear it.
 	if len(existing.MachineIDs) != 2 {
 		t.Errorf("the group's machines were cleared by the sync: %v", existing.MachineIDs)
+	}
+}
+
+// The production failure this fixes: six groups existed locally by name with
+// no directory id, so every run tried to CREATE them and the unique index on
+// {tenant_id, name} rejected all six — on every sync, forever.
+func TestExistingGroupOfTheSameNameIsAdoptedNotRecreated(t *testing.T) {
+	handMade := &database.Group{
+		ID: primitive.NewObjectID(), TenantID: "t1", Name: "Dflare",
+		MachineIDs: []string{"agent-1"},
+	}
+	store := &fakeStore{groups: []*database.Group{handMade}}
+	dir := &fakeDirectory{
+		groups:  []graph.Group{{ID: "g9", DisplayName: "Dflare"}},
+		members: map[string][]string{"g9": {}},
+	}
+
+	cfg := settings()
+	cfg.SyncUsers = false
+
+	counts, err := newSyncer(store, &fakeKeycloak{taken: map[string]bool{}}).
+		Run(context.Background(), cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.groups) != 1 {
+		t.Fatalf("groups = %d, want the one that was already there", len(store.groups))
+	}
+	if counts.GroupsUpdated != 1 || counts.GroupsCreated != 0 {
+		t.Errorf("created %d updated %d, want 0 and 1", counts.GroupsCreated, counts.GroupsUpdated)
+	}
+	// Recording the id is the whole point: without it the next run comes back
+	// through the name path and the one after that, forever.
+	if got := store.groupByName("Dflare"); got == nil || got.EntraGroupID != "g9" {
+		t.Errorf("the adopted group did not keep the directory id: %+v", got)
+	}
+	if len(handMade.MachineIDs) != 1 {
+		t.Errorf("adoption cleared the group's machines: %v", handMade.MachineIDs)
+	}
+}
+
+// Adoption must not become a way for one directory group to take over another
+// group's members just because the names happen to match.
+func TestGroupHeldByADifferentDirectoryIDIsNotHijacked(t *testing.T) {
+	other := &database.Group{
+		ID: primitive.NewObjectID(), TenantID: "t1", Name: "Pune Team",
+		EntraGroupID: "g-original", DirectorySource: database.DirectorySourceEntra,
+		MemberIDs: []string{"u1"},
+	}
+	store := &fakeStore{groups: []*database.Group{other}}
+	dir := &fakeDirectory{
+		groups:  []graph.Group{{ID: "g-different", DisplayName: "Pune Team"}},
+		members: map[string][]string{"g-different": {}},
+	}
+
+	cfg := settings()
+	cfg.SyncUsers = false
+
+	counts, err := newSyncer(store, &fakeKeycloak{taken: map[string]bool{}}).
+		Run(context.Background(), cfg, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if counts.GroupsCreated != 0 || counts.GroupsUpdated != 0 {
+		t.Errorf("the clashing group was stored anyway: created %d updated %d",
+			counts.GroupsCreated, counts.GroupsUpdated)
+	}
+	if other.EntraGroupID != "g-original" || len(other.MemberIDs) != 1 {
+		t.Errorf("an unrelated group was hijacked: %+v", other)
 	}
 }
 

@@ -55,6 +55,7 @@ type Store interface {
 	UpdateUser(user *database.User) error
 	ListDirectoryUsers(tenantID, source string) ([]*database.User, error)
 	GetGroupByEntraGroupID(tenantID, groupID string) (*database.Group, error)
+	GetGroupByTenantAndName(tenantID, name string) (*database.Group, error)
 	CreateGroup(group *database.Group) error
 	UpdateGroup(group *database.Group) error
 }
@@ -439,13 +440,44 @@ func (s *Syncer) syncGroups(
 
 // upsertGroup creates or updates one group, reporting whether it was created.
 //
-// Groups are matched on their directory id, never on name: a renamed group
-// matched by name would become a second group, and every policy scoped to the
-// first would quietly stop applying to anybody.
+// Groups are matched on their directory id first, so that renaming a group in
+// Entra follows the same group here rather than forking a second one and
+// leaving every policy scoped to the first applying to nobody.
+//
+// Only when no group carries the id does the name decide, and then only to
+// adopt a group that is not already somebody else's: the groups collection has
+// a unique index on {tenant_id, name}, so a directory group whose name is
+// already taken locally — made by hand, or by a run from before the id was
+// recorded — cannot be inserted at all. Without the adoption that group fails
+// with a duplicate key on every single sync, forever, which is exactly what
+// production was doing.
 func (s *Syncer) upsertGroup(tenantID string, dg graph.Group, members []string) (bool, error) {
 	existing, err := s.store.GetGroupByEntraGroupID(tenantID, dg.ID)
 	if err != nil {
 		return false, err
+	}
+
+	if existing == nil {
+		byName, err := s.store.GetGroupByTenantAndName(tenantID, dg.Name())
+		if err != nil {
+			return false, err
+		}
+		switch {
+		case byName == nil:
+			// Genuinely new.
+		case byName.EntraGroupID == "":
+			// Unclaimed: adopt it, recording the directory id so every later
+			// run matches on identity instead of coming back through here.
+			s.logger.Info("Entra sync: adopting an existing group of the same name",
+				zap.String("group", dg.Name()), zap.String("entra_group_id", dg.ID))
+			existing = byName
+		default:
+			// Two different directory groups share a name. Taking the first
+			// one's members would be a silent hijack, so say so instead.
+			return false, fmt.Errorf(
+				"the name %q is already held by a different directory group (%s); rename one of them in Entra",
+				dg.Name(), byName.EntraGroupID)
+		}
 	}
 
 	if existing == nil {

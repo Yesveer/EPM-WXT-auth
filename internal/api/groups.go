@@ -4,6 +4,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/vsay/vsay-auth/internal/database"
@@ -39,9 +40,13 @@ func NewGroupsHandler(
 func (h *GroupsHandler) ListGroups(c *gin.Context) {
 	tenantID, _ := c.Get("tenant_id")
 	tid := tenantID.(string)
+	search := strings.TrimSpace(c.Query("search"))
 	limitStr := c.Query("limit")
 
-	if limitStr == "" {
+	// A search always goes through the paged path, even with no limit: the
+	// point of searching is to look past the page in front of you, and an
+	// unpaged answer to the same question would be a different answer.
+	if limitStr == "" && search == "" {
 		groups, err := h.store.ListGroupsByTenant(tid)
 		if err != nil {
 			h.logger.Error("Failed to list groups", zap.Error(err))
@@ -69,13 +74,15 @@ func (h *GroupsHandler) ListGroups(c *gin.Context) {
 	}
 	skip := (page - 1) * limit
 
-	total, err := h.store.CountGroupsByTenant(tid)
+	// Counted through the same filter as the listing, or a search matching
+	// three groups still reports "page 1 of 12".
+	total, err := h.store.CountGroupsByTenantSearch(tid, search)
 	if err != nil {
 		h.logger.Error("Failed to count groups", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list groups"})
 		return
 	}
-	groups, err := h.store.ListGroupsByTenantPaged(tid, limit, skip)
+	groups, err := h.store.SearchGroupsByTenantPaged(tid, search, limit, skip)
 	if err != nil {
 		h.logger.Error("Failed to list groups", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list groups"})

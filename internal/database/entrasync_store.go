@@ -175,6 +175,29 @@ func (s *Store) GetGroupByEntraGroupID(tenantID, groupID string) (*Group, error)
 	return &group, nil
 }
 
+// GetGroupByTenantAndName finds a group by the name it carries locally.
+//
+// Used only when no group carries the directory id yet. The groups collection
+// has a unique index on {tenant_id, name}, so a directory group whose name is
+// already present cannot simply be inserted — without this lookup that group
+// fails to store on every run, forever.
+func (s *Store) GetGroupByTenantAndName(tenantID, name string) (*Group, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var group Group
+	err := s.db.database.Collection("groups").FindOne(ctx, bson.M{
+		"tenant_id": tenantID, "name": name,
+	}).Decode(&group)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &group, nil
+}
+
 // ListDirectoryUsers returns the tenant's accounts that the sync owns.
 //
 // Used to find people who have left the directory. Accounts created here by
